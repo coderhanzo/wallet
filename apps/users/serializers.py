@@ -1,6 +1,5 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
-from phonenumber_field.serializerfields import PhoneNumberField
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.conf import settings
 from djoser.serializers import UserCreateSerializer
@@ -9,12 +8,12 @@ User = get_user_model()
 
 
 class CreateUserSerializer(UserCreateSerializer):
+    confirm_password = serializers.CharField(write_only=True)
 
     class Meta(UserCreateSerializer.Meta):
         model = User
         fields = [
             "id",
-            # "profile_pic",
             "email",
             "first_name",
             "other_name",
@@ -22,58 +21,52 @@ class CreateUserSerializer(UserCreateSerializer):
             "phone_number",
             "password",
             "confirm_password",
-            "roles",
         ]
 
-    def verify_password(self, data):
+    def validate(self, data):
         if data["password"] != data["confirm_password"]:
             raise serializers.ValidationError({"password": "Passwords do not match"})
+        data.pop("confirm_password")
+        return data
 
     def create(self, validated_data):
-        validated_data.pop("confirm_password")
-
         user = User.objects.create_user(**validated_data)
         user.set_password(validated_data["password"])
         user.save()
-
         return user
 
 
-class UserSerializer(serializers.ModelSerializer):
+class UserDetailSerializer(serializers.ModelSerializer):
     full_name = serializers.SerializerMethodField()
-    phone_number = PhoneNumberField()
 
     class Meta:
         model = User
         fields = [
             "id",
-            # "profile_pic",
             "email",
             "first_name",
             "last_name",
             "other_name",
             "phone_number",
-            "roles",
             "is_verified",
             "full_name",
         ]
 
     def get_full_name(self, obj):
-        return obj.get_full_name
+        return obj.get_full_name  # Corrected to call the property
 
     def to_representation(self, instance):
-        representation = super(UserSerializer, self).to_representation(instance)
+        representation = super(UserDetailSerializer, self).to_representation(instance)
         if instance.is_superuser:
             representation["superuser"] = True
         return representation
 
-    def create(self, validated_data):
-        return User.objects.create_user(**validated_data)
 
 class UpdateProfileSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["first_name", "other_name", "last_name"] # "profile_pic",
+        fields = ["first_name", "other_name", "last_name", "phone_number", "email"]
+
 
 class TokenRefreshSerializer(serializers.Serializer):
     refresh = serializers.CharField()
@@ -87,11 +80,8 @@ class TokenRefreshSerializer(serializers.Serializer):
         if settings.SIMPLE_JWT.get("ROTATE_REFRESH_TOKENS"):
             if settings.SIMPLE_JWT.get("BLACKLIST_AFTER_ROTATION"):
                 try:
-                    # Attempt to blacklist the given refresh token
                     refresh.blacklist()
                 except AttributeError:
-                    # If blacklist app not installed, `blacklist` method will
-                    # not be present
                     pass
 
             refresh.set_jti()
@@ -103,14 +93,11 @@ class TokenRefreshSerializer(serializers.Serializer):
         return data
 
 
-# reset password serializer
 class ResetPasswordSerializer(serializers.Serializer):
-    email = serializers.EmailField()
     password = serializers.CharField()
     confirm_password = serializers.CharField()
 
     def validate(self, data):
         if data["password"] != data["confirm_password"]:
             raise serializers.ValidationError({"password": "Passwords do not match"})
-
         return data
