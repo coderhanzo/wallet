@@ -52,6 +52,8 @@ class UserDetailSerializer(serializers.ModelSerializer):
             "full_name",
         ]
 
+        read_only_fields = fields
+
     def get_full_name(self, obj):
         return obj.get_full_name  # Corrected to call the property
 

@@ -1,16 +1,21 @@
 # from django.shortcuts import render
 # from django.contrib.auth import update_session_auth_hash, logout
+import email
+import html
+import token
 from django.contrib.auth import authenticate
 from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.contrib.auth import update_session_auth_hash
 from django.utils.encoding import force_bytes
+from django.utils import timezone
 from django.core.mail import send_mail
 from django.urls import reverse
 from django.conf import settings
 from django.db import transaction
 from django.template.loader import render_to_string
+from numpy import full
 
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -38,10 +43,9 @@ from .serializers import (
 # from djoser.compat import get_user_email
 from .serializers import TokenRefreshSerializer
 from .models import User
-import logging
+from loguru import logger
 
-
-logger = logging.getLogger(__name__)
+log = logger.bind(name="users")
 
 
 @api_view(["GET"])
@@ -56,6 +60,53 @@ def refresh_token_view(request):
         return Response(status=status.HTTP_401_UNAUTHORIZED)
     return Response(serializer.validated_data, status=status.HTTP_200_OK)
 
+# helper function to issue tokens
+def issue_tokens(user):
+    """Generates JWT tokens and creates a response with refresh cookie."""
+    token = RefreshToken.for_user(user)
+    serializer = UserDetailSerializer(instance=user)
+    response = Response(serializer.data)
+
+    # set refresh token in http only cookie
+    response.set_cookie(
+        key=settings.SIMPLE_JWT["AUTH_COOKIE"],
+        value=str(token),
+        httponly=True,
+        secure=settings.SIMPLE_JWT["AUTH_COOKIE_SECURE"],
+        samesite=settings.SIMPLE_JWT["AUTH_COOKIE_SAMESITE"],
+        domain=settings.SIMPLE_JWT["AUTH_COOKIE_DOMAIN"],
+    )
+    response.data["access"] = str(token.access_token)
+    logger.info(f"Tokens issued for user {user.get_full_name}")
+    return response
+
+
+# helper function to send otp to user
+def send_otp(user):
+    if not user.otp_code:
+        logger.warning(f"failed to send otp email for user {user.get_full_name}")
+        return False
+    
+    email_context = {
+        "user": user,
+        "otp_code": user.otp_code,
+    }
+    subject = "Your Verification Code"
+    try:
+        email_body = render_to_string("email/otp_email.html", email_context)
+        send_mail(
+            subject=subject,
+            message=f"Your verification code is {user.otp_code}",
+            html_message=email_body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[user.email],
+            fail_silently=False, # set to True in production
+        )
+        logger.info(f"OTP email sent to {user.get_full_name}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to send OTP email to {user.get_full_name}: {e}")
+        return False
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
@@ -65,7 +116,7 @@ def get_logged_in_user(request):
     return Response(serializer.data, status=status.HTTP_200_OK)
 
 
-@api_view(["GET"])
+@api_view(["POST"])
 @permission_classes([IsAuthenticated])
 @authentication_classes([JWTAuthentication])
 def logout_view(request):
@@ -74,12 +125,11 @@ def logout_view(request):
     return drf_response
 
 
-# get_all_users view, checks if user has admin or is_superuser role
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 @authentication_classes([JWTAuthentication])
 def get_all_users(request):
-    if request.user.is_superuser or request.user.roles == User.Roles.ADMIN:
+    if request.user.is_superuser or request.user.is_staff:
         users = User.objects.all()
         serializer = UserDetailSerializer(users, many=True)
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -94,58 +144,123 @@ def get_all_users(request):
 def login_view(request):
     email = request.data.get("email")
     password = request.data.get("password")
+    logger.info(f"Authenticating User {user.get_full_name}")
+
     user = authenticate(request, email=email, password=password)
     """
-    The authenticate function returns a user object if the credentials are valid, and sends otp code to the
-    user's email if the user is an admin or moderator.
+    returns token and user data if user is authenticated
+    if user is not verified, send OTP code to email
     """
-    if user is not None:
-        if user.roles in [User.Roles.ADMIN, User.Roles.BIKER]:
-            # Send OTP code to email
-            user.generate_otp_code()
-            email_context = {
-                "user": user,
-                "otp_code": user.otp_code,
-            }
-            email_body = render_to_string("email/otp_email.html", email_context)
-            send_mail(
-                subject="Activate Your Account",
-                message="",  # Plain text version (optional)
-                html_message=email_body,
-                from_email=settings.DEFAULT_FROM_EMAIL,
-                recipient_list=[user.email],
-            )
+    if user is None:
+        logger.warning(f"Authenticate for user {user.get_full_name} successful")
+        if not user.is_active:
+            logger.warning(f"Login attempt failed: Account inactive for: {user.get_full_name}")
             return Response(
-                {"message": "OTP sent. Please check your email to verify."},
-                status=status.HTTP_200_OK,
+                {"detail": "Account inactive. Please contact support."},
+                status=status.HTTP_403_FORBIDDEN,
             )
-        # Check if user is verified and active
-        if user.is_verified and user.is_active:
-            token = RefreshToken.for_user(user)
-            response = Response(
-                {
-                    "email": user.email,
-                    "full_name": user.get_full_name,
-                    "is_verified": user.is_verified,
-                    "access": str(token.access_token),
-                }
-            )
-            response.set_cookie(
-                key=settings.SIMPLE_JWT["AUTH_COOKIE"],
-                value=str(token),
-                httponly=True,
-            )
-            return response
+        
+        if user._is_verified:
+            # user is active but verified, proceed to login
+            logger.info(f"Login attempt successful: proceed to login: {user.get_full_name}")
+            return issue_tokens(user)
+        else:
+            # user is active but not verified
+            logger.warning(f"login attempt: uer {user.get_full_name} not verified")
 
+            # check otp status
+            otp_valid = False
+            if user.otp_code and user.otp_expiry and user.otp_expiry > timezone.now():
+                otp_valid = True
+
+            if otp_valid:
+                # otp exists and is valid
+                logger.info(f"Existing OTP code is still valid, prompting user: {user.get_full_name} to verify")
+                return Response(
+                    {
+                        "detail": "OTP code already sent. Please check your email.",
+                        # print otp here for testing, remove it in production
+                        "otp_code": user.otp_code,
+                    },
+                    status=status.HTTP_401_UNAUTHORIZED, # 401 UNAUTHORIZED, but guide user through the process to verify
+                    # print otp here for testing, remove it in production
+                    
+                )
+            else:
+                # otp has exipred or doesnt exist
+                logger.info(f"OTP code expired or does not exist, generating a new one for user: {user.get_full_name}")
+                user.generate_otp_code()
+                if send_otp(user):
+                    return Response(
+                        {
+                            "detail": "Your account is not verified. Please check your email for a new code to verify your email.",
+                        },
+                        status=status.HTTP_401_UNAUTHORIZED, # 401 UNAUTHORIZED, but guide user through the process to verify
+                    )
+                else:
+                    logger.error(f"Failed to send OTP email to {user.get_full_name}")
+                    return Response(
+                        {
+                            "detail": "Account not verified. Failed to send verification code. Please try again later or contact support.",
+                        },
+                        status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    )
+    else:
+        # authentication failed
+        logger.warning(f"Login attempt failed: Invalid credentials for user {user.email}")
         return Response(
-            {"detail": "Account not verified or inactive. Please verify your account."},
+            {
+                "detail": "Invalid credentials. Please try again.",
+            },
             status=status.HTTP_401_UNAUTHORIZED,
         )
+    # if user is not None:
+    #     if user.roles in [User.Roles.ADMIN, User.Roles.BIKER]:
+    #         # Send OTP code to email
+    #         user.generate_otp_code()
+    #         email_context = {
+    #             "user": user,
+    #             "otp_code": user.otp_code,
+    #         }
+    #         email_body = render_to_string("email/otp_email.html", email_context)
+    #         send_mail(
+    #             subject="Activate Your Account",
+    #             message="",  # Plain text version (optional)
+    #             html_message=email_body,
+    #             from_email=settings.DEFAULT_FROM_EMAIL,
+    #             recipient_list=[user.email],
+    #         )
+    #         return Response(
+    #             {"message": "OTP sent. Please check your email to verify."},
+    #             status=status.HTTP_200_OK,
+    #         )
+    #     # Check if user is verified and active
+    #     if user.is_verified and user.is_active:
+    #         token = RefreshToken.for_user(user)
+    #         response = Response(
+    #             {
+    #                 "email": user.email,
+    #                 "full_name": user.get_full_name,
+    #                 "is_verified": user.is_verified,
+    #                 "access": str(token.access_token),
+    #             }
+    #         )
+    #         response.set_cookie(
+    #             key=settings.SIMPLE_JWT["AUTH_COOKIE"],
+    #             value=str(token),
+    #             httponly=True,
+    #         )
+    #         return response
 
-    return Response(
-        {"detail": "Invalid credentials. Please try again."},
-        status=status.HTTP_401_UNAUTHORIZED,
-    )
+    #     return Response(
+    #         {"detail": "Account not verified or inactive. Please verify your account."},
+    #         status=status.HTTP_401_UNAUTHORIZED,
+    #     )
+
+    # return Response(
+    #     {"detail": "Invalid credentials. Please try again."},
+    #     status=status.HTTP_401_UNAUTHORIZED,
+    # )
 
 
 @api_view(["POST"])

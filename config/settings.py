@@ -1,7 +1,10 @@
 import os
+import sys
 import environ
 from pathlib import Path
+from loguru import logger
 from datetime import timedelta
+import time
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -125,7 +128,7 @@ SIMPLE_JWT = {
     "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
     "UPDATE_LAST_LOGIN": True,
     "AUTH_COOKIE": "refresh_token",  # Cookie name. Enables cookies if value is set.
-    "AUTH_COOKIE_DOMAIN": None,  # A string like "example.com", or None for standard domain cookie.
+    "AUTH_COOKIE_DOMAIN": env("DOMAIN"),  # A string like "example.com", or None for standard domain cookie.
     "AUTH_COOKIE_SECURE": False,  # Whether the auth cookies should be secure (https:// only).
     "AUTH_COOKIE_HTTP_ONLY": True,  # Http only cookie flag.It's not fetch by javascript.
     "AUTH_COOKIE_PATH": "/",  # The path of the auth cookie.
@@ -151,6 +154,53 @@ TIME_ZONE = "UTC"
 USE_I18N = True
 
 USE_TZ = True
+
+# loguru configurations
+LOG_DIR = BASE_DIR / "logs"  # Create a 'logs' directory in your project root
+LOG_DIR.mkdir(exist_ok=True)  # Ensure the directory exists
+
+# Remove default handlers
+logger.remove()
+
+# Add ONE Console Sink (outside the loop)
+logger.add(
+    sys.stderr,
+    level="DEBUG",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | {level: <8} | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - {message}",
+    colorize=True
+)
+
+# Configure file sinks for each app
+apps = ["users", "cards"]
+
+for app_name in apps:
+    logger.add(
+        LOG_DIR / f"{app_name}_{{time:YYYY-MM-DD}}.log",  # Fixed: Use f-string + escaped {{
+        level="INFO",
+        rotation="1 day",
+        retention="7 days",
+        compression="zip",
+        format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {name}:{function}:{line} - {message}",
+        filter=lambda record: record["extra"].get("app") == app_name,  # Critical: Filter by app
+        enqueue=True,
+        backtrace=True,
+        diagnose=True
+    )
+
+logger.info("Loguru logging configured!") # Confirm configuration
+# X loguru configurations end X
+
+
+# Unfold configurations
+UNFOLD = {
+    "SITE_TITLE": "My Project Admin",
+    "SITE_HEADER": "My Project Admin",
+    "SITE_SYMBOL": "🐍 | 🧑‍💻",  # Optional: Icon for browser tab
+    "SHOW_HISTORY": True, # Optional: Show recent actions
+    "ENVIRONMENT": "development", # Optional: display environment banner
+    "DASHBOARD_CALLBACK": "users.unfold_admin.dashboard_callback", # Path to your callback function
+    # Add more customizations as needed: https://django-unfold.otus.ai/c
+}
 
 
 # Static files (CSS, JavaScript, Images)
