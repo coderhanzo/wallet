@@ -2,8 +2,7 @@ from django.db.models import Count
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from datetime import timedelta
-from unfold.widgets import TALL # Or SHORT, FULL
-from unfold.charts import Chart # Import Chart component
+from unfold.components import Chart # Import Chart component
 from .models import User # Import your User model
 
 # Make sure this function path matches UNFOLD["DASHBOARD_CALLBACK"] in settings.py
@@ -49,7 +48,7 @@ def dashboard_callback(request):
              # Chart type can be 'line', 'bar', 'pie', etc.
              # See Chart.js docs: https://www.chartjs.org/docs/latest/
              chart_type="line",
-             width=TALL, # Adjust width/height: SHORT, TALL, FULL
+             column_span=2, # Span across two columns
         )
     )
 
@@ -90,7 +89,7 @@ def dashboard_callback(request):
                 ],
             },
             chart_type="pie", # Pie chart
-            width=TALL,
+            column_span=2, # Span across two columns
         )
     )
 

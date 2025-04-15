@@ -25,7 +25,7 @@ ALLOWED_HOSTS = env("ALLOWED_HOSTS").split(" ")
 
 
 # Application definition
-LOCAL_APPS = []
+LOCAL_APPS = ["apps.users", ] # "apps.cards"
 
 # Third-party apps
 THIRD_PARTY_APPS = ["silk", "rest_framework", "rest_framework_simplejwt"]
@@ -51,6 +51,8 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "silk.middleware.SilkyMiddleware",
+    "corsheaders.middleware.CorsMiddleware"
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -135,14 +137,16 @@ SIMPLE_JWT = {
     "AUTH_COOKIE_SAMESITE": None,  # Whether to set the flag restricting cookie leaks on cross-site requests.
 }
 
+DOMAIN=env("DOMAIN")  # The domain for the site.
+
 # email settings
 EMAIL_BACKEND = env("EMAIL_BACKEND")
-# EMAIL_HOST = config("EMAIL_HOST")
-# EMAIL_PORT = config("EMAIL_PORT")
-# EMAIL_USE_TLS = config("EMAIL_USE_TLS")
-# EMAIL_HOST_USER = config("EMAIL_HOST_USER")
-# EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD")
-# DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL")
+EMAIL_HOST = env("EMAIL_HOST")
+EMAIL_PORT = env("EMAIL_PORT")
+EMAIL_USE_TLS = env("EMAIL_USE_TLS")
+EMAIL_HOST_USER = env("EMAIL_HOST_USER")
+EMAIL_HOST_PASSWORD = env("EMAIL_HOST_PASSWORD")
+DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL")
 
 # Internationalization
 # https://docs.djangoproject.com/en/5.2/topics/i18n/
@@ -187,7 +191,7 @@ for app_name in apps:
         diagnose=True
     )
 
-logger.info("Loguru logging configured!") # Confirm configuration
+# logger.info("Loguru logging configured!") # Confirm configuration
 # X loguru configurations end X
 
 
@@ -198,7 +202,7 @@ UNFOLD = {
     "SITE_SYMBOL": "🐍 | 🧑‍💻",  # Optional: Icon for browser tab
     "SHOW_HISTORY": True, # Optional: Show recent actions
     "ENVIRONMENT": "development", # Optional: display environment banner
-    "DASHBOARD_CALLBACK": "users.unfold_admin.dashboard_callback", # Path to your callback function
+    "DASHBOARD_CALLBACK": "apps.users.unfold_admin.dashboard_callback", # Path to your callback function
     # Add more customizations as needed: https://django-unfold.otus.ai/c
 }
 
@@ -219,3 +223,20 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 DATE_FORMAT = "%Y-%m-%d"
 DATETIME_FORMAT = "%Y-%m-%d %H:%M"
+
+# Custom user model
+AUTH_USER_MODEL = "users.User"
+
+# Only enable the toolbar when we're in debug mode and we're
+# not running tests. Django will change DEBUG to be False for
+# tests, so we can't rely on DEBUG alone.
+ENABLE_DEBUG_TOOLBAR = env.bool("DJANGO_DEBUG", default=True) and "test" not in sys.argv
+if ENABLE_DEBUG_TOOLBAR:
+    INSTALLED_APPS += [
+        "debug_toolbar",
+    ]
+    MIDDLEWARE += [
+        "debug_toolbar.middleware.DebugToolbarMiddleware",
+    ]
+    # Customize the config to support turbo and htmx boosting.
+    DEBUG_TOOLBAR_CONFIG = {"ROOT_TAG_EXTRA_ATTRS": "data-turbo-permanent hx-preserve"}
